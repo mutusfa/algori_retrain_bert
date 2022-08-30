@@ -3,11 +3,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from retrain_bert.settings import DEEPEST_LEVEL, PROJECT_DIR
+from retrain_bert import settings
 
 
 def load_raw_data(path: Path = None) -> pd.DataFrame:
-    path = path or PROJECT_DIR / "data/raw/classified_ocr_2022_08_11.csv"
+    path = path or settings.PROJECT_DIR / "data/raw/classified_ocr_2022_08_11.csv"
     return pd.read_csv(
         path,
         dtype={"Category_MasterProduct": str, "Category_BERT": str},
@@ -53,7 +53,7 @@ def prepare_labels(categories: pd.DataFrame):
 
 
 def load_labels(path: Path = None) -> pd.DataFrame:
-    path = path or PROJECT_DIR / "data/labels.csv"
+    path = path or settings.PROJECT_DIR / "data/labels.csv"
     labels = pd.read_csv(path)
     labels.set_index(["level", "cat"], inplace=True)
     return labels
@@ -77,18 +77,18 @@ if __name__ == "__main__":
     clean_data(data)
     categories = split_into_categories(data)
     labels = prepare_labels(categories)
-    labels.to_csv(PROJECT_DIR / "data/labels.csv")
+    labels.to_csv(settings.PROJECT_DIR / "data/labels.csv")
     label_ids = data["Category_MasterProduct"].apply(to_label_id, labels=labels)
     label_ids = pd.DataFrame.from_records(
-        label_ids, columns=[f"level_{l+1}" for l in range(DEEPEST_LEVEL)]
+        label_ids, columns=[f"level_{l+1}" for l in range(settings.DEEPEST_LEVEL)]
     ).astype(int)
     label_ids.index = data.index
     data = pd.concat([data, label_ids], axis=1)
-    data[["OcrValue"] + label_ids.columns.to_list()].to_csv(PROJECT_DIR / "data/train/train.csv", index=False)
+    data[["OcrValue"] + label_ids.columns.to_list()].to_csv(settings.PROJECT_DIR / "data/train/train.csv", index=False)
 
-    with open(PROJECT_DIR / "data/raw/missing_ocr_values.json") as mo:
-        with open(PROJECT_DIR / "data/train/ocr_values.txt", "w") as f:
-            ocr_in_db = pd.read_csv(PROJECT_DIR / "data/raw/OCR_Values.csv")
+    with open(settings.PROJECT_DIR / "data/raw/missing_ocr_values.json") as mo:
+        with open(settings.PROJECT_DIR / "data/train/ocr_values.txt", "w") as f:
+            ocr_in_db = pd.read_csv(settings.PROJECT_DIR / "data/raw/OCR_Values.csv")
             missing_ocr = json.load(mo)
             ocrs = ocr_in_db.Name.to_list() + missing_ocr
             ocrs = [str(o).strip().upper() for o in ocrs if o]
