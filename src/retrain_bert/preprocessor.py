@@ -1,13 +1,14 @@
+import argparse
 import json
 from pathlib import Path
+import sys
 
 import pandas as pd
 
 from retrain_bert import settings
 
 
-def load_raw_data(path: Path = None) -> pd.DataFrame:
-    path = path or settings.PROJECT_DIR / "data/raw/classified_ocr_2022_08_11.csv"
+def load_raw_data(path: Path) -> pd.DataFrame:
     return pd.read_csv(
         path,
         dtype={"Category_MasterProduct": str, "Category_BERT": str},
@@ -32,9 +33,10 @@ def _split_into_categories(category_code, num_categories=5):
 
 
 def split_into_categories(
-    df: pd.DataFrame, col="Category_MasterProduct"
+    codes: pd.DataFrame, col="Category_MasterProduct"
 ) -> pd.DataFrame:
-    codes = df[col]
+    if isinstance(codes, pd.DataFrame):
+        codes = codes[col]
     categories = codes.apply(_split_into_categories)
     return pd.DataFrame.from_records(categories)
 
@@ -59,6 +61,24 @@ def load_labels(path: Path = None) -> pd.DataFrame:
     return labels
 
 
+def get_labels_conf(labels: pd.DataFrame) -> list:
+    labels_conf = []
+    level_start = 0
+    level_end = 0
+    for level in range(settings.DEEPEST_LEVEL):
+        level_end = level_start + len(labels.loc[level + 1])
+        labels_conf.append(
+            {
+                "level": level + 1,
+                "start": level_start,
+                "end": level_end,
+                "num_classes": len(labels.loc[level + 1]),
+            }
+        )
+        level_start = level_end
+    return labels_conf
+
+
 def to_label_id(
     category_code: str, labels: pd.DataFrame, deepest_level: int = 5
 ) -> int:
@@ -72,24 +92,41 @@ def to_label_id(
     ]
 
 
-if __name__ == "__main__":
-    data = load_raw_data()
+def parse_args(args):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--classified-ocrs", type=Path, required=True)
+    parser.add_argument("--labels-in", type=Path)
+    parser.add_argument("--labels-out", type=Path, required=True)
+    parser.add_argument("--train-out", type=Path, required=True)
+    parser.add_argument("--categories-out", type=Path, required=True)
+    return parser.parse_args(args)
+
+
+def main(args):
+    data = load_raw_data(args.classified_ocrs)
+    print(f"Loaded {len(data)} classified OCRs")
     clean_data(data)
+    print(f"Cleaned data, {len(data)} classified OCRs left")
     categories = split_into_categories(data)
     labels = prepare_labels(categories)
-    labels.to_csv(settings.PROJECT_DIR / "data/labels.csv")
+    labels.to_csv(args.labels_out)
+    if args.labels_in:
+        labels = load_labels(args.labels_in)
+    labels_conf = get_labels_conf(labels)
     label_ids = data["Category_MasterProduct"].apply(to_label_id, labels=labels)
     label_ids = pd.DataFrame.from_records(
         label_ids, columns=[f"level_{l+1}" for l in range(settings.DEEPEST_LEVEL)]
     ).astype(int)
+    for level, col in zip(range(settings.DEEPEST_LEVEL), label_ids.columns):
+        label_ids[col] -= labels_conf[level]["start"]
     label_ids.index = data.index
     data = pd.concat([data, label_ids], axis=1)
-    data[["OcrValue"] + label_ids.columns.to_list()].to_csv(settings.PROJECT_DIR / "data/train/train.csv", index=False)
+    data[["OcrValue"] + label_ids.columns.to_list()].to_csv(args.train_out, index=False)
+    print(f"Saved {len(data)} classified OCRs as training data")
+    data.Category_MasterProduct.drop_duplicates().sort_values().to_csv(
+        args.categories_out, index=False, header=False
+    )
 
-    with open(settings.PROJECT_DIR / "data/raw/missing_ocr_values.json") as mo:
-        with open(settings.PROJECT_DIR / "data/train/ocr_values.txt", "w") as f:
-            ocr_in_db = pd.read_csv(settings.PROJECT_DIR / "data/raw/OCR_Values.csv")
-            missing_ocr = json.load(mo)
-            ocrs = ocr_in_db.Name.to_list() + missing_ocr
-            ocrs = [str(o).strip().upper() for o in ocrs if o]
-            f.write("\n".join(ocrs))
+
+if __name__ == "__main__":
+    main(parse_args(sys.argv[1:]))

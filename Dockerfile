@@ -1,14 +1,15 @@
-FROM tensorflow/tensorflow:2.9.1
+FROM tensorflow/tensorflow:latest-gpu-jupyter
 
 ARG ENVIRONMENT=production
-ARG POETRY_VERSION=1.1.13
 
-RUN pip install poetry==$POETRY_VERSION
+COPY ./jupyter_server_config.json /root/.jupyter/jupyter_server_config.json
 
 WORKDIR /code
 
-COPY pyproject.toml poetry.lock ./
+RUN pip install --upgrade jsonschema  # Why do I need to fix deps manually
 
-RUN POETRY_VIRTUALENVS_CREATE=false poetry install
+COPY pyproject.toml ./
 
-COPY src/retrain_bert .
+COPY src/retrain_bert ./src/retrain_bert
+
+RUN pip install .
