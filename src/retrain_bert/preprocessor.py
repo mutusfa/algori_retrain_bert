@@ -3,23 +3,26 @@ import json
 from pathlib import Path
 import sys
 
+import numpy as np
 import pandas as pd
 
 from retrain_bert import settings
+from retrain_bert.data.loaders import *
 
 
-def load_raw_data(path: Path) -> pd.DataFrame:
-    return pd.read_csv(
-        path,
-        dtype={"Category_MasterProduct": str, "Category_BERT": str},
+def clean_data(data: pd.DataFrame) -> pd.DataFrame:
+    data = data.copy()
+    data.dropna(
+        subset=["Category_AECOC", "Verified_OcrValueId", "OcrValue_Verified"],
+        how="any",
+        inplace=True,
     )
-
-
-def clean_data(data: pd.DataFrame, inplace=True) -> pd.DataFrame:
-    data.dropna(subset=["Category_MasterProduct", "OcrValueId"], inplace=inplace)
     data.drop_duplicates(
-        subset=["OcrValueId", "MappingGroupId", "Category_MasterProduct"], inplace=True
+        subset=["Verified_OcrValueId", "MappingGroupId", "Category_AECOC"],
+        inplace=True,
     )
+    data = data.query("Category_AECOC.str.len() % 2 == 0")
+    return data
 
 
 def chunk_string(string, chunk_size):
@@ -32,9 +35,7 @@ def _split_into_categories(category_code, num_categories=5):
     return categories
 
 
-def split_into_categories(
-    codes: pd.DataFrame, col="Category_MasterProduct"
-) -> pd.DataFrame:
+def split_into_categories(codes: pd.DataFrame, col="Category_AECOC") -> pd.DataFrame:
     if isinstance(codes, pd.DataFrame):
         codes = codes[col]
     categories = codes.apply(_split_into_categories)
@@ -54,11 +55,10 @@ def prepare_labels(categories: pd.DataFrame):
     return labels
 
 
-def load_labels(path: Path = None) -> pd.DataFrame:
-    path = path or settings.PROJECT_DIR / "data/labels.csv"
-    labels = pd.read_csv(path)
-    labels.set_index(["level", "cat"], inplace=True)
-    return labels
+def encode_label(label_ids, labels_table):
+    one_hot = np.zeros(len(labels_table))
+    one_hot[label_ids] = 1
+    return one_hot
 
 
 def get_labels_conf(labels: pd.DataFrame) -> list:
@@ -105,7 +105,7 @@ def parse_args(args):
 def main(args):
     data = load_raw_data(args.classified_ocrs)
     print(f"Loaded {len(data)} classified OCRs")
-    clean_data(data)
+    data = clean_data(data)
     print(f"Cleaned data, {len(data)} classified OCRs left")
     categories = split_into_categories(data)
     labels = prepare_labels(categories)
@@ -113,7 +113,7 @@ def main(args):
     if args.labels_in:
         labels = load_labels(args.labels_in)
     labels_conf = get_labels_conf(labels)
-    label_ids = data["Category_MasterProduct"].apply(to_label_id, labels=labels)
+    label_ids = data["Category_AECOC"].apply(to_label_id, labels=labels)
     label_ids = pd.DataFrame.from_records(
         label_ids, columns=[f"level_{l+1}" for l in range(settings.DEEPEST_LEVEL)]
     ).astype(int)
@@ -121,9 +121,15 @@ def main(args):
         label_ids[col] -= labels_conf[level]["start"]
     label_ids.index = data.index
     data = pd.concat([data, label_ids], axis=1)
-    data[["OcrValue"] + label_ids.columns.to_list()].to_csv(args.train_out, index=False)
+    data.rename(
+        columns={"OcrValue_Verified": "verified_ocr", "Category_AECOC": "category"},
+        inplace=True,
+    )
+    data[["verified_ocr", "category"] + label_ids.columns.to_list()].to_csv(
+        args.train_out, index=False
+    )
     print(f"Saved {len(data)} classified OCRs as training data")
-    data.Category_MasterProduct.drop_duplicates().sort_values().to_csv(
+    data.category.drop_duplicates().sort_values().to_csv(
         args.categories_out, index=False, header=False
     )
 

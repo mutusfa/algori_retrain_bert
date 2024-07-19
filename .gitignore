@@ -140,3 +140,5 @@ cython_debug/
 # project data
 data/
 models/
+
+# noisy notebooks, it's best to be explicit when do we want to commit them
